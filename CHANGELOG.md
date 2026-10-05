@@ -1,5 +1,15 @@
 # cmcall changelog
 
+## 0.1.1
+
+### Fixed
+
+- `--ice relay` was not strictly relay-only when the relay also announces a
+  STUN server: aioice's RELAY policy drops host candidates but still gathers
+  server-reflexive ones, which could let ICE pick a STUN path and leave TURN
+  untested. The STUN server is now dropped as well, and a local SDP with any
+  non-relay candidate fails the run at `setup`.
+
 ## 0.1.0
 
 ### Added

@@ -191,6 +191,11 @@ def force_relay_only(pc: RTCPeerConnection) -> None:
 
     Must be called after the transports exist (addTrack / setRemoteDescription)
     and before ``setLocalDescription`` (which gathers candidates).
+
+    aioice's RELAY policy only leaves out *host* candidates; it still asks a
+    configured STUN server for server-reflexive ones. So the STUN server is
+    dropped too: the only candidate left is the TURN allocation, and every
+    connectivity check and media packet has to go through the TURN server.
     """
     from aioice.ice import TransportPolicy
 
@@ -201,6 +206,7 @@ def force_relay_only(pc: RTCPeerConnection) -> None:
         if conn.turn_server is None:
             raise CallError("setup", "relay-only ICE requested, but no TURN server is known")
         conn._transport_policy = TransportPolicy.RELAY
+        conn.stun_server = None
 
 
 def selected_path(pc: Optional[RTCPeerConnection]) -> dict:
@@ -661,8 +667,12 @@ class _Peer:
         await self.pc.setLocalDescription(desc)
         self.gather_s = time.time() - t0
         self.local_sdp = self.pc.localDescription.sdp
-        if self.relay_only and not sdp_candidates(self.local_sdp).get("relay"):
-            raise CallError("ice", "no relay candidate gathered (TURN allocation failed)")
+        if self.relay_only:
+            cands = sdp_candidates(self.local_sdp)
+            if not cands.get("relay"):
+                raise CallError("ice", "no relay candidate gathered (TURN allocation failed)")
+            if set(cands) != {"relay"}:  # guard against aioice changes
+                raise CallError("setup", f"relay-only ICE leaked other candidates: {cands}")
 
     async def wait_connected(self, timeout: float = 20.0) -> bool:
         if self._connected is None:

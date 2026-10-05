@@ -190,6 +190,33 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(out["jitter_ms"], 2.0)
         self.assertEqual(out["loss_pct"], 10.0)
 
+    def test_relay_only_drops_stun(self):
+        from aioice.ice import TransportPolicy
+        from aiortc import RTCPeerConnection
+        from aiortc.mediastreams import AudioStreamTrack
+
+        ice = rtc.parse_ice_servers([
+            {"urls": ["stun:192.0.2.1:3478"]},
+            {"urls": ["turn:192.0.2.1:3478"], "username": "u", "credential": "p"},
+        ])
+
+        async def go():
+            from aiortc import RTCConfiguration
+            pc = RTCPeerConnection(RTCConfiguration(iceServers=ice))
+            pc.addTrack(AudioStreamTrack())
+            try:
+                rtc.force_relay_only(pc)
+                return [(c._transport_policy, c.stun_server, c.turn_server) for c in rtc._ice_connections(pc)]
+            finally:
+                await pc.close()
+
+        conns = asyncio.run(go())
+        self.assertTrue(conns)
+        for policy, stun, turn in conns:
+            self.assertEqual(policy, TransportPolicy.RELAY)
+            self.assertIsNone(stun)
+            self.assertEqual(turn, ("192.0.2.1", 3478))
+
     def test_relay_only_without_turn_fails(self):
         async def go():
             peer = rtc.ProbePeer([], relay_only=True)
