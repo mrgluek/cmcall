@@ -542,6 +542,16 @@ async def collect_rtp_stats(pc: Optional[RTCPeerConnection]) -> dict:
 # --------------------------------------------------------------------------
 
 
+async def _drain(track) -> None:
+    while True:
+        try:
+            await track.recv()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+
+
 class _Peer:
     def __init__(self, ice_servers: list[RTCIceServer], relay_only: bool = False) -> None:
         self.ice_servers = ice_servers
@@ -664,6 +674,10 @@ class EchoPeer(_Peer):
         def _on_track(track):
             if track.kind == "audio":
                 self._spawn(self._pump(track))
+            else:
+                # Video is not echoed, but aiortc decodes every received frame
+                # into an unbounded queue: read it, or memory grows all call long.
+                self._spawn(_drain(track))
 
         await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type="offer"))
         pc.addTrack(self.echo)

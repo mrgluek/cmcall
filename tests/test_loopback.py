@@ -59,6 +59,52 @@ class LoopbackTest(unittest.TestCase):
         self.assertLess(e["rtt_avg_ms"], 600, e)
 
 
+async def _dc_app_like_call():
+    """Offer shaped like Delta Chat's calls-webapp: audio + video + the two
+    negotiated data channels, with one candidate trickled over iceTrickling."""
+    import json
+
+    from aiortc import RTCPeerConnection, RTCSessionDescription
+    from aiortc.mediastreams import AudioStreamTrack, VideoStreamTrack
+
+    app = RTCPeerConnection()
+    trickle = app.createDataChannel("iceTrickling", negotiated=True, id=1)
+    app.createDataChannel("mutedState", negotiated=True, id=3)
+    app.addTrack(AudioStreamTrack())
+    app.addTrack(VideoStreamTrack())
+    echo = rtc.EchoPeer([], greeting=False)
+    try:
+        await app.setLocalDescription(await app.createOffer())
+        answer = await echo.accept(app.localDescription.sdp)
+        await app.setRemoteDescription(RTCSessionDescription(sdp=answer, type="answer"))
+        assert await echo.wait_connected(15), "echo did not connect"
+        for _ in range(100):
+            if trickle.readyState == "open":
+                break
+            await asyncio.sleep(0.05)
+        cand = app.localDescription.sdp.split("a=candidate:")[1].split("\r\n")[0]
+        trickle.send(json.dumps({"candidate": "candidate:" + cand, "sdpMid": "0", "sdpMLineIndex": 0}))
+        await asyncio.sleep(2.0)
+        video_tracks = [t.receiver.track for t in echo.pc.getTransceivers() if t.kind == "video"]
+        backlog = [t._queue.qsize() for t in video_tracks]
+        return await echo.summary(), trickle.readyState, backlog
+    finally:
+        await echo.close()
+        await app.close()
+
+
+class DeltaChatAppOfferTest(unittest.TestCase):
+    def test_audio_video_datachannel_offer(self):
+        summary, trickle_state, video_backlog = asyncio.run(_dc_app_like_call())
+        self.assertTrue(summary["connected"])
+        self.assertEqual(trickle_state, "open")
+        self.assertEqual(summary["trickled_candidates"], 1)
+        self.assertGreater(summary["rtp"]["packets_received"], 50)
+        self.assertGreater(summary["echo_frames"], 50)
+        # video frames are consumed, not piling up in aiortc's queue
+        self.assertTrue(video_backlog and max(video_backlog) < 5, video_backlog)
+
+
 class HelperTest(unittest.TestCase):
     def test_parse_ice_servers_drops_ipv6(self):
         servers = rtc.parse_ice_servers(

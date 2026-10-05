@@ -16,5 +16,9 @@
 - `--json` machine-readable output, failing `stage` + `error` on failure.
 - `cmcall.rtc`: RPC-agnostic building blocks (`CallLoop`, `EchoPeer`,
   `ProbePeer`, stats helpers) shared with the bouncer bot's echo service.
-- Unit tests: in-process WebRTC loopback, full CLI run against fake Delta Chat
-  accounts, relay-only run through a local coturn.
+- `EchoPeer` answers Delta Chat app offers (audio + video + negotiated
+  `iceTrickling`/`mutedState` data channels), uses trickled candidates and
+  drains received video so aiortc's decoded-frame queue cannot grow.
+- Unit tests: in-process WebRTC loopback, a Delta Chat app-shaped offer,
+  full CLI run against fake Delta Chat accounts, relay-only run through a
+  local coturn.
