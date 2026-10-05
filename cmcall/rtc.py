@@ -568,23 +568,32 @@ async def collect_rtp_stats(pc: Optional[RTCPeerConnection]) -> dict:
         logger.debug("getStats failed: %s", e)
         return {}
     out: dict[str, Any] = {}
+
+    def put(key, value, scale=1.0, digits=1):
+        # aiortc leaves fields None until the first RTCP report arrives
+        if value is not None:
+            out[key] = round(value * scale, digits) if scale != 1.0 or digits is not None else value
+
+    ts_to_ms = 1000 / SAMPLE_RATE
     for s in report.values():
         t = getattr(s, "type", "")
         if getattr(s, "kind", "audio") != "audio":
             continue
         if t == "outbound-rtp":
-            out["packets_sent"] = s.packetsSent
-            out["bytes_sent"] = s.bytesSent
+            put("packets_sent", s.packetsSent, digits=None)
+            put("bytes_sent", s.bytesSent, digits=None)
         elif t == "inbound-rtp":
-            out["packets_received"] = s.packetsReceived
-            out["packets_lost"] = max(0, s.packetsLost)
-            out["jitter_ms"] = round(s.jitter / (SAMPLE_RATE / 1000), 1)
+            put("packets_received", s.packetsReceived, digits=None)
+            if s.packetsLost is not None:
+                out["packets_lost"] = max(0, s.packetsLost)
+            put("jitter_ms", s.jitter, ts_to_ms)
         elif t == "remote-inbound-rtp":
             # what the *peer* reported about our stream (RTCP receiver report)
-            out["rtcp_rtt_ms"] = round(s.roundTripTime * 1000, 1)
-            out["remote_packets_lost"] = max(0, s.packetsLost)
-            out["remote_fraction_lost"] = round(s.fractionLost / 256 * 100, 2)
-            out["remote_jitter_ms"] = round(s.jitter / (SAMPLE_RATE / 1000), 1)
+            put("rtcp_rtt_ms", getattr(s, "roundTripTime", None), 1000)
+            if s.packetsLost is not None:
+                out["remote_packets_lost"] = max(0, s.packetsLost)
+            put("remote_fraction_lost", getattr(s, "fractionLost", None), 100 / 256, 2)
+            put("remote_jitter_ms", s.jitter, ts_to_ms)
     recv, lost = out.get("packets_received"), out.get("packets_lost")
     if recv is not None and lost is not None and recv + lost > 0:
         out["loss_pct"] = round(lost / (recv + lost) * 100, 2)

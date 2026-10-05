@@ -172,6 +172,24 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(rtc.sdp_codec(sdp), "opus/48000/2")
         self.assertEqual(rtc.sdp_candidates(sdp), {"host": 1, "relay": 1})
 
+    def test_rtp_stats_before_first_rtcp(self):
+        from types import SimpleNamespace as NS
+
+        class FakePc:
+            async def getStats(self):
+                return {
+                    "o": NS(type="outbound-rtp", kind="audio", packetsSent=10, bytesSent=900),
+                    "i": NS(type="inbound-rtp", kind="audio", packetsReceived=9, packetsLost=1, jitter=96),
+                    "r": NS(type="remote-inbound-rtp", kind="audio", roundTripTime=None,
+                            packetsLost=0, fractionLost=None, jitter=0),
+                }
+
+        out = asyncio.run(rtc.collect_rtp_stats(FakePc()))
+        self.assertNotIn("rtcp_rtt_ms", out)
+        self.assertEqual(out["packets_sent"], 10)
+        self.assertEqual(out["jitter_ms"], 2.0)
+        self.assertEqual(out["loss_pct"], 10.0)
+
     def test_relay_only_without_turn_fails(self):
         async def go():
             peer = rtc.ProbePeer([], relay_only=True)

@@ -49,6 +49,26 @@ ROLE_KEY = "ui.cmcall_role"
 REPORT_PREFIX = "📞"
 
 
+#: Cached test profiles only need messages for the few minutes of a test;
+#: let core delete them so reused profiles don't grow their databases.
+DELETE_DEVICE_AFTER = "3600"
+
+
+class LoginRejected(Exception):
+    """The relay refused a cached profile's login (typically: deleted after
+    inactivity). ``remaining`` are the accounts not yet waited for."""
+
+    def __init__(self, account, message: str, remaining: list):
+        super().__init__(message)
+        self.account = account
+        self.remaining = remaining
+
+
+def _login_rejected(ev) -> bool:
+    msg = (ev.get("msg") or "").lower()
+    return ev.kind in ("Warning", "Error") and "failed to login" in msg and "authentic" in msg
+
+
 class Failure(Exception):
     def __init__(self, stage: str, message: str):
         super().__init__(message)
@@ -184,6 +204,14 @@ class Relay:
         ac.set_config(ROLE_KEY, role)
         return ac
 
+    def recreate(self, old, role: str):
+        """Drop a profile the relay no longer accepts and make a fresh one."""
+        with contextlib.suppress(Exception):
+            old.stop_io()
+        with contextlib.suppress(Exception):
+            old.remove()
+        return self._create(role)
+
 
 class Events:
     """Read one account's core events with timeouts."""
@@ -218,18 +246,50 @@ class Events:
 
 
 def bring_online(accounts, out: Out, timeout: float) -> None:
+    """Start I/O and wait for IMAP IDLE; raise LoginRejected on a refused login."""
     for ac in accounts:
         ac.set_config("bot", "1")
+        ac.set_config("delete_device_after", DELETE_DEVICE_AFTER)
         ac.start_io()
-    for ac in accounts:
+    for i, ac in enumerate(accounts):
         addr = ac.get_config("configured_addr")
-        ev = Events(ac, out, addr)
-        ev.wait(
-            lambda e: e.kind == "ImapInboxIdle",
+        ev = Events(ac, out, addr).wait(
+            lambda e: e.kind == "ImapInboxIdle" or _login_rejected(e),
             timeout,
             f"{addr} to go online (IMAP IDLE)",
             "setup",
         )
+        if ev.kind != "ImapInboxIdle":
+            raise LoginRejected(ac, ev.get("msg") or "login failed", accounts[i + 1:])
+
+
+def bring_online_or_recreate(profiles: dict, ctx: dict, out: Out, timeout: float, result: dict) -> None:
+    """``profiles`` maps role -> (relay, account); rejected cached profiles are
+    replaced (once each) by fresh ones, updating ``profiles`` in place."""
+    pending = [ac for _relay, ac in profiles.values()]
+    recreated = set()
+    while pending:
+        try:
+            bring_online(pending, out, timeout)
+            return
+        except LoginRejected as e:
+            role, (relay, _old) = next(
+                (r, v) for r, v in profiles.items() if v[1] is e.account
+            )
+            addr = e.account.get_config("configured_addr")
+            if role in recreated:
+                raise Failure("setup", f"{relay} rejected the login of a brand-new profile {addr}: {e}") from e
+            out(f"# {addr} was rejected by {relay} (deleted after inactivity?), creating a new profile")
+            try:
+                fresh = ctx[relay].recreate(e.account, role)
+            except Failure:
+                raise
+            except Exception as e2:
+                raise Failure("setup", f"cannot recreate profile on {relay}: {e2}") from e2
+            recreated.add(role)
+            result.setdefault("recreated", []).append(addr)
+            profiles[role] = (relay, fresh)
+            pending = [fresh] + list(e.remaining)
 
 
 def turn_label(servers, relay: str) -> str:
@@ -299,15 +359,18 @@ def _run(args, out: Out, result: dict, stack, loop: rtc.CallLoop, peers: dict) -
     t_setup = time.time()
     ctx = {r: Relay(r, base_dir, stack, out) for r in relays}
     out("# Setting up profiles...", 0)
+    caller_role = "prober" if args.to else "caller"
     try:
-        caller = ctx[args.relay1].account("prober" if args.to else "caller")
-        callee = None if args.to else ctx[args.relay2].account("callee")
+        profiles = {caller_role: (args.relay1, ctx[args.relay1].account(caller_role))}
+        if not args.to:
+            profiles["callee"] = (args.relay2, ctx[args.relay2].account("callee"))
     except Failure:
         raise
     except Exception as e:
         raise Failure("setup", f"profile setup failed: {e}") from e
-    accounts = [a for a in (caller, callee) if a is not None]
-    bring_online(accounts, out, args.timeout)
+    bring_online_or_recreate(profiles, ctx, out, args.timeout, result)
+    caller = profiles[caller_role][1]
+    callee = profiles["callee"][1] if "callee" in profiles else None
     caller_addr = caller.get_config("configured_addr")
     result["caller"] = caller_addr
     caller_ev = Events(caller, out, caller_addr)

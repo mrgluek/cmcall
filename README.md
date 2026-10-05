@@ -108,6 +108,21 @@ TURN credentials), `signaling` (call not delivered / not answered), `ice`
   (they live in `~/.cache/cmcall/<relay>/`, separate from cmping's).
 - `-v` / `-vv` / `-vvv` for core warnings, aiortc info and every core event.
 
+### Test profiles
+
+Like cmping, cmcall reuses its profiles between runs: one deltachat-rpc-server
+per relay in `~/.cache/cmcall/<relay>/`, and per relay one profile per role
+(`caller`, `callee`, `prober` for `--to`), so a relay can hold up to three.
+
+- If a relay refuses the login of a cached profile (chatmail deletes
+  accounts after a period of inactivity), cmcall drops it and creates a new
+  one automatically; the JSON result lists the dropped addresses under
+  `recreated`. A brand-new profile that is refused fails the run at `setup`.
+- Profiles delete their messages after an hour (`delete_device_after`), so
+  their databases don't grow with every run.
+- Stray calls from earlier runs are ignored: the callee only answers the
+  call carrying this run's ICE credentials.
+
 Relays given as an IP address get a random `dclogin:` account; relays with a
 mailadm-style endpoint can be given as `https://relay/new_email?t=TOKEN`, and
 `https://relay/new` is tried as a fallback, as in cmping.

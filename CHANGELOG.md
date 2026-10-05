@@ -23,6 +23,11 @@
   at a lost packet until it is 320 ms deep and stays there - 2 % loss used to
   turn a 180 ms echo round trip into 550 ms and drop extra frames. Lost
   packets now cost only themselves (also for the bouncer echo service).
+- Cached test profiles the relay no longer accepts (deleted after
+  inactivity) are replaced by fresh ones automatically (`recreated` in the
+  JSON result); profiles delete their messages after an hour.
+- RTP stats no longer fail on calls shorter than the first RTCP report
+  (aiortc leaves `roundTripTime` unset until then).
 - Unit tests: in-process WebRTC loopback, a Delta Chat app-shaped offer,
   full CLI run against fake Delta Chat accounts, relay-only run through a
   local coturn.

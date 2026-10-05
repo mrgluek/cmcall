@@ -77,10 +77,12 @@ class FakeContact:
 
 
 class FakeAccount:
-    def __init__(self, rpc, addr, ice, behaviour="answer"):
+    def __init__(self, rpc, addr, ice, behaviour="answer", reject_login=False):
         self._rpc, self.id = rpc, next(_ids)
         self.config = {"configured_addr": addr}
         self.ice, self.msgs, self.behaviour = ice, {}, behaviour
+        self.reject_login = reject_login
+        self.removed = False
 
     def push(self, **ev):
         self._rpc.get_queue(self.id).put(ev)
@@ -92,7 +94,18 @@ class FakeAccount:
         self.config[key] = value
 
     def start_io(self):
-        self.push(kind="ImapInboxIdle")
+        if self.reject_login:
+            # what core emits when the relay refuses the credentials
+            self.push(kind="Warning", msg="IMAP failed to login: Authentication failed: "
+                                          "AUTHENTICATIONFAILED Authentication failed.")
+        else:
+            self.push(kind="ImapInboxIdle")
+
+    def stop_io(self):
+        pass
+
+    def remove(self):
+        self.removed = True
 
     def ice_servers(self):
         return self.ice
@@ -104,30 +117,46 @@ class FakeAccount:
         return self.msgs[msg_id]
 
 
-def fake_relays(ice, callee_behaviour="answer"):
+def fake_relays(ice, callee_behaviour="answer", rejected=(), always_rejected=()):
+    """``rejected``: roles whose cached profile the relay refuses (a fresh one
+    works); ``always_rejected``: roles refused even with a fresh profile."""
     rpc = FakeRpc()
     accounts = {}
+    created = itertools.count(1)
 
     class FakeRelay:
         def __init__(self, relay, base_dir, stack, out):
             self.relay = relay
 
+        def _new(self, role, reject):
+            behaviour = callee_behaviour if role == "callee" else "answer"
+            addr = f"{role}{next(created)}@{self.relay}"
+            return FakeAccount(rpc, addr, ice, behaviour, reject_login=reject)
+
         def account(self, role):
             key = (self.relay, role)
             if key not in accounts:
-                behaviour = callee_behaviour if role == "callee" else "answer"
-                accounts[key] = FakeAccount(rpc, f"{role}@{self.relay}", ice, behaviour)
+                reject = role in rejected or role in always_rejected
+                accounts[key] = self._new(role, reject)
             return accounts[key]
 
+        def recreate(self, old, role):
+            old.remove()
+            accounts[(self.relay, role)] = self._new(role, role in always_rejected)
+            return accounts[(self.relay, role)]
+
+    FakeRelay.accounts = accounts
     return FakeRelay
 
 
-def run_cli(argv, ice, callee_behaviour="answer"):
+def run_cli(argv, ice, callee_behaviour="answer", **relay_kw):
     args = cli.build_parser().parse_args(argv)
     args.relay2 = args.relay2 or args.relay1
     lines = []
     out = cli.Out(quiet=False, verbose=0)
-    with mock.patch.object(cli, "Relay", fake_relays(ice, callee_behaviour)), \
+    relay_cls = fake_relays(ice, callee_behaviour, **relay_kw)
+    run_cli.accounts = relay_cls.accounts
+    with mock.patch.object(cli, "Relay", relay_cls), \
             mock.patch("builtins.print", lambda *a, **k: lines.append(" ".join(map(str, a)))):
         result = cli.run(args, out)
         cli.print_report(result, out)
@@ -155,7 +184,7 @@ class CliFlowTest(unittest.TestCase):
             self.assertIn(key, sig)
         echo = result["caller_stats"]["echo"]
         self.assertEqual(echo["received"], echo["sent"])
-        self.assertIn("CMCALL a.example(caller@a.example) -> b.example(callee@b.example)", text)
+        self.assertIn("CMCALL a.example(caller1@a.example) -> b.example(callee2@b.example)", text)
         self.assertIn("beeps sent", text)
         self.assertIn("rtt min/avg/max/mdev", text)
         self.assertIn("callee:", text)
@@ -172,6 +201,23 @@ class CliFlowTest(unittest.TestCase):
                              "--timeout", "5"], ice=[], callee_behaviour="decline")
         self.assertFalse(result["ok"])
         self.assertEqual(result["stage"], "signaling")
+
+    def test_rejected_cached_profile_is_recreated(self):
+        result, text = run_cli(["a.example", "b.example", "--ice", "all", "-d", "1", "-i", "0.5",
+                                "--settle", "0.2", "--timeout", "5"], ice=[], rejected=("callee",))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["recreated"], ["callee2@b.example"])
+        self.assertEqual(result["callee"], "callee3@b.example")
+        self.assertIn("callee2@b.example was rejected by b.example", text)
+        for ac in run_cli.accounts.values():
+            self.assertEqual(ac.config["delete_device_after"], cli.DELETE_DEVICE_AFTER)
+
+    def test_rejected_fresh_profile_fails_setup(self):
+        result, text = run_cli(["a.example", "--ice", "all", "-d", "1", "--timeout", "5"],
+                               ice=[], always_rejected=("caller",))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["stage"], "setup")
+        self.assertIn("brand-new profile", result["error"])
 
     @unittest.skipUnless(_turn_running(), "no local coturn on 127.0.0.1:3478")
     def test_relay_only_through_turn(self):
