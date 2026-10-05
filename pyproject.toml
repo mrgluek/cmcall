@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cmcall"
+version = "0.1.0"
+readme = "README.md"
+description = "test Delta Chat calls (signaling + WebRTC media) between chatmail relays"
+license = { text = "MPL-2.0" }
+requires-python = ">=3.10"
+dependencies = [
+  "deltachat-rpc-server>=2.56.0",
+  "deltachat-rpc-client>=2.56.0",
+  "xdg-base-dirs>=6.0.2",
+  "aiortc>=1.9.0",
+  "numpy>=1.24",
+]
+
+[project.urls]
+Repository = "https://github.com/mrgluek/cmcall"
+Changelog = "https://github.com/mrgluek/cmcall/blob/main/CHANGELOG.md"
+
+[project.scripts]
+cmcall = "cmcall.cli:main"
+
+[tool.setuptools]
+packages = ["cmcall"]
+
+[tool.ruff]
+lint.select = ["F", "I", "PLC", "PLE", "PLW"]
+lint.ignore = ["PLC0415"]
