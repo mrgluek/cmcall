@@ -19,6 +19,10 @@
 - `EchoPeer` answers Delta Chat app offers (audio + video + negotiated
   `iceTrickling`/`mutedState` data channels), uses trickled candidates and
   drains received video so aiortc's decoded-frame queue cannot grow.
+- `AudioJitterBuffer`: replaces aiortc's audio jitter buffer, which stalls
+  at a lost packet until it is 320 ms deep and stays there - 2 % loss used to
+  turn a 180 ms echo round trip into 550 ms and drop extra frames. Lost
+  packets now cost only themselves (also for the bouncer echo service).
 - Unit tests: in-process WebRTC loopback, a Delta Chat app-shaped offer,
   full CLI run against fake Delta Chat accounts, relay-only run through a
   local coturn.

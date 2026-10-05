@@ -11,6 +11,7 @@ import asyncio
 import os
 import sys
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -103,6 +104,45 @@ class DeltaChatAppOfferTest(unittest.TestCase):
         self.assertGreater(summary["echo_frames"], 50)
         # video frames are consumed, not piling up in aiortc's queue
         self.assertTrue(video_backlog and max(video_backlog) < 5, video_backlog)
+
+
+class PacketLossTest(unittest.TestCase):
+    """5 % RTP loss must cost frames, not latency (aiortc's stock audio jitter
+    buffer stalls at holes and stays 320 ms deep afterwards)."""
+
+    def test_loss_does_not_inflate_rtt(self):
+        import random
+
+        from aiortc import rtcrtpreceiver
+
+        orig = rtcrtpreceiver.RTCRtpReceiver._handle_rtp_packet
+        rnd = random.Random(1)
+
+        async def lossy(self, packet, arrival_time_ms):
+            if rnd.random() < 0.05:
+                return
+            return await orig(self, packet, arrival_time_ms)
+
+        with unittest.mock.patch.object(rtcrtpreceiver.RTCRtpReceiver, "_handle_rtp_packet", lossy):
+            out, _echo, _ = asyncio.run(_call(duration=5.0, interval=0.5))
+        e = out["echo"]
+        self.assertGreater(out["rtp"]["loss_pct"], 1)
+        self.assertGreaterEqual(e["received"], e["sent"] - 1, e)
+        self.assertLess(e["rtt_avg_ms"], 300, e)
+
+    def test_jitter_buffer_steps_over_holes(self):
+        from aiortc.rtp import RtpPacket
+
+        jb = rtc.AudioJitterBuffer(prefetch=2)
+        out = []
+        for seq in (1, 2, 4, 5, 6, 7):  # 3 is lost
+            p = RtpPacket(sequence_number=seq, timestamp=seq * 960)
+            p._data = bytes([seq])
+            _pli, frame = jb.add(p)
+            if frame:
+                out.append(frame.data[0])
+        self.assertEqual(out, [1, 2, 4, 5])  # 6, 7 stay buffered (prefetch)
+        self.assertEqual(jb.skipped, 1)
 
 
 class HelperTest(unittest.TestCase):

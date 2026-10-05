@@ -52,6 +52,7 @@ from aiortc import (
     RTCPeerConnection,
     RTCSessionDescription,
 )
+from aiortc.jitterbuffer import JitterBuffer, JitterFrame
 from aiortc.mediastreams import MediaStreamError, MediaStreamTrack
 
 logger = logging.getLogger("cmcall")
@@ -258,6 +259,59 @@ def sdp_codec(sdp: str, kind: str = "audio") -> Optional[str]:
         if pt in rtpmap:
             return rtpmap[pt]
     return None
+
+
+# --------------------------------------------------------------------------
+# Jitter buffer
+# --------------------------------------------------------------------------
+
+
+class AudioJitterBuffer(JitterBuffer):
+    """aiortc's audio jitter buffer with sane loss handling.
+
+    Stock aiortc stops releasing frames at a missing packet until the buffer
+    is full (16 packets = 320 ms) and then stays that deep for the rest of the
+    call: a single lost packet adds ~300 ms of latency per receiving side for
+    good, and later overflows discard frames that did arrive. A 2 % loss
+    turned a 180 ms echo round trip into 550 ms in tests.
+
+    Here the oldest packet is released whenever more than ``prefetch`` packets
+    are buffered (the same depth aiortc keeps), stepping over holes in front
+    of it: loss costs only the lost frames, not latency, and reordering of up
+    to ``prefetch`` packets is still absorbed. (Real Delta Chat apps use libwebrtc's NetEq,
+    which conceals loss too; this keeps cmcall's numbers comparable.)
+    """
+
+    def __init__(self, capacity: int = 16, prefetch: int = 4) -> None:
+        super().__init__(capacity=capacity, prefetch=prefetch)
+        self.skipped = 0
+
+    def _remove_frame(self, sequence_number: int) -> Optional[JitterFrame]:
+        # Audio codecs (Opus, G.711) send one packet per frame, so a frame is
+        # simply the oldest buffered packet; holes in front of it are lost.
+        buffered = sum(1 for p in self._packets if p is not None)
+        if self._origin is None or buffered <= self._prefetch:
+            return None
+        for i in range(self.capacity):
+            packet = self._packets[(self._origin + i) % self.capacity]
+            if packet is not None:
+                self.remove(i + 1)
+                self.skipped += i
+                return JitterFrame(data=packet._data, timestamp=packet.timestamp)
+        return None
+
+
+def use_audio_jitter_buffer(pc: RTCPeerConnection) -> None:
+    """Swap in :class:`AudioJitterBuffer` on all audio receivers of ``pc``.
+
+    Call after the transceivers exist and before media flows.
+    """
+    for t in pc.getTransceivers():
+        receiver = t.receiver
+        if t.kind == "audio" and not isinstance(
+            getattr(receiver, "_RTCRtpReceiver__jitter_buffer", None), AudioJitterBuffer
+        ):
+            receiver._RTCRtpReceiver__jitter_buffer = AudioJitterBuffer()
 
 
 # --------------------------------------------------------------------------
@@ -681,6 +735,7 @@ class EchoPeer(_Peer):
 
         await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type="offer"))
         pc.addTrack(self.echo)
+        use_audio_jitter_buffer(pc)
         await self._set_local(await pc.createAnswer())
         self.ice_start_at = time.time()
         return self.local_sdp
@@ -770,6 +825,7 @@ class ProbePeer(_Peer):
                 self._spawn(self._pump(track))
 
         pc.addTrack(self.probe)
+        use_audio_jitter_buffer(pc)
         await self._set_local(await pc.createOffer())
         return self.local_sdp
 
