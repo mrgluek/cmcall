@@ -1,5 +1,17 @@
 # cmcall changelog
 
+## 0.1.3
+
+### Added
+
+- `EchoPeer` building blocks for other services than an echo (used by the
+  bouncer bot's voice meetings): `out_track=` (own outgoing track),
+  `on_audio=` (receive decoded frames instead of echoing them), `on_muted=` /
+  `remote_audio_enabled` from the Delta Chat app's `mutedState` channel, and
+  `offer()` / `accept_answer()` to place calls (audio-only offer, as the apps'
+  max-bundle answerer requires). `PacedAudioTrack` and `frame_from_pcm()` are
+  public.
+
 ## 0.1.2
 
 ### Added

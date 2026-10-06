@@ -396,7 +396,12 @@ def dominant_freq(samples: np.ndarray, rate: int) -> float:
     return float(np.argmax(spec) * rate / samples.size)
 
 
-class _PacedAudioTrack(MediaStreamTrack):
+def frame_from_pcm(pcm: np.ndarray) -> av.AudioFrame:
+    """A 48 kHz mono s16 AudioFrame from int16 samples."""
+    return _frame_from_pcm(pcm)
+
+
+class PacedAudioTrack(MediaStreamTrack):
     """Audio track emitting one 20 ms frame per 20 ms of wall time."""
 
     kind = "audio"
@@ -405,6 +410,12 @@ class _PacedAudioTrack(MediaStreamTrack):
         super().__init__()
         self._start: Optional[float] = None
         self._ts = 0
+
+    async def pace(self) -> None:
+        await self._pace()
+
+    def stamp(self, frame: av.AudioFrame) -> av.AudioFrame:
+        return self._stamp(frame)
 
     async def _pace(self) -> None:
         if self.readyState != "live":
@@ -422,6 +433,9 @@ class _PacedAudioTrack(MediaStreamTrack):
         frame.pts = self._ts
         frame.time_base = fractions.Fraction(1, SAMPLE_RATE)
         return frame
+
+
+_PacedAudioTrack = PacedAudioTrack
 
 
 class EchoTrack(_PacedAudioTrack):
@@ -734,10 +748,16 @@ class _Peer:
 
 
 class EchoPeer(_Peer):
-    """Answer an incoming call and echo its audio back.
+    """Answer an incoming call (or place one) and echo its audio back.
 
     ``trickle_channels`` mirrors the negotiated data channels of Delta Chat's
-    calls-webapp so trickled ICE candidates from real clients are used.
+    calls-webapp so trickled ICE candidates from real clients are used, and
+    the app's ``mutedState`` messages (``{"audioEnabled": bool, ...}``) end up
+    in ``remote_audio_enabled`` / ``on_muted(audio_enabled)``.
+
+    For other uses than an echo (e.g. a conference bridge) pass ``out_track``
+    - any track with ``play(frames)`` - and ``on_audio(frame)``, which then
+    receives every decoded frame instead of the echo.
     """
 
     def __init__(
@@ -748,13 +768,47 @@ class EchoPeer(_Peer):
         delay: float = 0.0,
         greeting: bool = True,
         trickle_channels: bool = True,
+        out_track: Optional[MediaStreamTrack] = None,
+        on_audio=None,
+        on_muted=None,
     ) -> None:
         super().__init__(ice_servers, relay_only)
-        self.echo = EchoTrack(delay)
+        self.echo = out_track if out_track is not None else EchoTrack(delay)
+        self.on_audio = on_audio
+        self.on_muted = on_muted
+        self.remote_audio_enabled = True
         self.meter = AudioMeter()
         self.greeting = greeting
         self.trickle_channels = trickle_channels
         self.trickled = 0
+
+    async def offer(self) -> str:
+        """Place a call ourselves: return an audio-only offer SDP.
+
+        Audio only on purpose: the negotiated data channels' SCTP transport
+        keeps the offerer's ICE from connecting against the max-bundle
+        answerer of the Delta Chat apps (hermes-deltachat-platform). So there
+        is no trickling and no mutedState on calls we place.
+        """
+        pc = self._new_pc()
+
+        @pc.on("track")
+        def _on_track(track):
+            if track.kind == "audio":
+                self._spawn(self._pump(track))
+            else:
+                self._spawn(_drain(track))
+
+        pc.addTrack(self.echo)
+        use_audio_jitter_buffer(pc)
+        await self._set_local(await pc.createOffer())
+        return self.local_sdp
+
+    async def accept_answer(self, answer_sdp: str) -> None:
+        """Apply the callee's answer to a call placed with :meth:`offer`."""
+        self.remote_sdp = answer_sdp
+        self.ice_start_at = time.time()
+        await self.pc.setRemoteDescription(RTCSessionDescription(sdp=answer_sdp, type="answer"))
 
     async def accept(self, offer_sdp: str) -> str:
         """Process the caller's offer; return our answer SDP (all candidates)."""
@@ -783,7 +837,18 @@ class EchoPeer(_Peer):
 
     def _setup_trickle(self, pc: RTCPeerConnection) -> None:
         channel = pc.createDataChannel("iceTrickling", negotiated=True, id=1)
-        pc.createDataChannel("mutedState", negotiated=True, id=3)
+        muted = pc.createDataChannel("mutedState", negotiated=True, id=3)
+
+        @muted.on("message")
+        def _on_muted(message):
+            try:
+                enabled = json.loads(message)["audioEnabled"]
+            except Exception:
+                return
+            if isinstance(enabled, bool) and enabled != self.remote_audio_enabled:
+                self.remote_audio_enabled = enabled
+                if self.on_muted is not None:
+                    self.on_muted(enabled)
 
         @channel.on("message")
         async def _on_message(message):
@@ -828,15 +893,18 @@ class EchoPeer(_Peer):
                 logger.debug("echo pump stopped: %s", e)
                 return
             self.meter.feed(frame)
-            self.echo.push(frame)
+            if self.on_audio is not None:
+                self.on_audio(frame)
+            else:
+                self.echo.push(frame)
 
     async def summary(self) -> dict:
         out = self.base_summary()
         out.update(self.meter.summary())
         out["rtp"] = await collect_rtp_stats(self.pc)
         out["trickled_candidates"] = self.trickled
-        out["echo_frames"] = self.echo.frames_echoed
-        out["echo_dropped_frames"] = self.echo.frames_dropped
+        out["echo_frames"] = getattr(self.echo, "frames_echoed", None)
+        out["echo_dropped_frames"] = getattr(self.echo, "frames_dropped", None)
         return out
 
 
