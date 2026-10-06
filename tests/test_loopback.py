@@ -190,6 +190,20 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(out["jitter_ms"], 2.0)
         self.assertEqual(out["loss_pct"], 10.0)
 
+    def test_turn_as_stun(self):
+        turn = [{"urls": ["turn:1.2.3.4:3478"], "username": "u", "credential": "p"}]
+        servers = rtc.parse_ice_servers(turn, turn_as_stun=True)
+        self.assertEqual(rtc.describe_ice_servers(servers), ["stun:1.2.3.4:3478", "turn:1.2.3.4:3478"])
+        self.assertIsNone(servers[0].username)
+        # explicit STUN wins, an announced STUN is kept as is, TLS TURN is not a STUN server
+        self.assertEqual(rtc.describe_ice_servers(rtc.parse_ice_servers(turn, True, stun="9.9.9.9:3478"))[0],
+                         "stun:9.9.9.9:3478")
+        announced = [{"urls": ["stun:5.5.5.5:3478"]}] + turn
+        self.assertEqual(rtc.describe_ice_servers(rtc.parse_ice_servers(announced, True))[0], "stun:5.5.5.5:3478")
+        tls = [{"urls": ["turns:1.2.3.4:5349?transport=tcp"], "username": "u", "credential": "p"}]
+        self.assertEqual(len(rtc.parse_ice_servers(tls, turn_as_stun=True)), 1)
+        self.assertEqual(rtc.parse_ice_servers(turn), rtc.parse_ice_servers(turn, turn_as_stun=False))
+
     def test_relay_only_drops_stun(self):
         from aioice.ice import TransportPolicy
         from aiortc import RTCPeerConnection

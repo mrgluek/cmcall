@@ -380,10 +380,12 @@ def _run(args, out: Out, result: dict, stack, loop: rtc.CallLoop, peers: dict) -
         result["callee"] = callee.get_config("configured_addr")
         callee_ev = Events(callee, out, result["callee"])
 
-    caller_ice = rtc.parse_ice_servers(caller.ice_servers())
+    # turn_as_stun: like Delta Chat apps (libwebrtc) - matters only for --ice all,
+    # relay-only drops STUN anyway
+    caller_ice = rtc.parse_ice_servers(caller.ice_servers(), turn_as_stun=True)
     result["caller_turn"] = turn_label(caller_ice, args.relay1)
     if callee is not None:
-        callee_ice = rtc.parse_ice_servers(callee.ice_servers())
+        callee_ice = rtc.parse_ice_servers(callee.ice_servers(), turn_as_stun=True)
         result["callee_turn"] = turn_label(callee_ice, args.relay2)
 
     # chat between the two

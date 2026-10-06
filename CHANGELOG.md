@@ -1,5 +1,17 @@
 # cmcall changelog
 
+## 0.1.2
+
+### Added
+
+- `parse_ice_servers(..., turn_as_stun=True)` also uses the relay's UDP TURN
+  server as STUN server, like libwebrtc in the Delta Chat apps. Chatmail
+  relays announce only TURN, so without it aioice behind NAT (e.g. the
+  bouncer bot in a Docker bridge network) could offer nothing but TURN relay
+  candidates and never connect peer-to-peer. `stun=` sets an explicit STUN
+  server instead. `--ice all` now gathers server-reflexive candidates the
+  same way the apps do; `--ice relay` is unchanged (STUN is dropped there).
+
 ## 0.1.1
 
 ### Fixed

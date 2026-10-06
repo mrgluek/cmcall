@@ -133,12 +133,19 @@ class CallLoop:
 # --------------------------------------------------------------------------
 
 
-def parse_ice_servers(ice: Any) -> list[RTCIceServer]:
+def parse_ice_servers(ice: Any, turn_as_stun: bool = False, stun: Optional[str] = None) -> list[RTCIceServer]:
     """Convert Delta Chat's ``ice_servers`` JSON (string or list) for aiortc.
 
     Core resolves STUN/TURN hostnames to IPs (``turn:1.2.3.4:3478``, also IPv6
     ``turn:[2a01::1]:3478``). aiortc can't parse bracketed IPv6 URLs, and only
     ever uses the first STUN and the first TURN URL anyway.
+
+    Chatmail relays announce only a TURN server. Delta Chat apps still get a
+    server-reflexive (srflx) candidate because libwebrtc also queries every
+    UDP TURN server as a STUN server; aioice doesn't, so behind NAT (e.g. a
+    Docker bridge) it can only offer TURN. ``turn_as_stun`` does what
+    libwebrtc does. ``stun`` (``host:port`` or ``stun:host:port``) sets an
+    explicit STUN server instead. Either goes first: aiortc uses one STUN URL.
     """
     data = json.loads(ice) if isinstance(ice, str) else ice
     servers = []
@@ -156,7 +163,22 @@ def parse_ice_servers(ice: Any) -> list[RTCIceServer]:
                 credential=s.get("credential"),
             )
         )
+    if any(u.startswith("stun") for s in servers for u in _urls(s)):
+        return servers
+    if stun:
+        url = stun if stun.startswith("stun:") else f"stun:{stun}"
+        return [RTCIceServer(urls=[url])] + servers
+    if turn_as_stun:
+        for s in servers:
+            for u in _urls(s):
+                m = re.match(r"turn:([^?]+)(\?transport=udp)?$", u)
+                if m:
+                    return [RTCIceServer(urls=[f"stun:{m.group(1)}"])] + servers
     return servers
+
+
+def _urls(server: RTCIceServer) -> list[str]:
+    return server.urls if isinstance(server.urls, list) else [server.urls]
 
 
 def describe_ice_servers(servers: list[RTCIceServer]) -> list[str]:
