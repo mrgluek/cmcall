@@ -80,6 +80,35 @@ ECHO_MAX_BACKLOG_FRAMES = 5
 ICE_GATHER_TIMEOUT_S = 10.0
 
 
+def _guard_aioice_send_stun() -> None:
+    """Don't send STUN retransmissions through a closed socket.
+
+    aioice keeps retransmitting a STUN request (e.g. the server-reflexive
+    query to a STUN server that never answers) for ~31.5 s, even after the
+    peer connection was closed. The retry then hits the closed UDP transport
+    and asyncio logs "Exception in callback Transaction.__retry()" with an
+    AttributeError traceback. Skipping the send lets the transaction time
+    out quietly; nothing else changes.
+    """
+    from aioice.ice import StunProtocol
+
+    if getattr(StunProtocol.send_stun, "_cmcall_guarded", False):
+        return
+    original = StunProtocol.send_stun
+
+    def send_stun(self, message, addr):
+        transport = getattr(self, "transport", None)
+        if transport is None or transport.is_closing():
+            return
+        original(self, message, addr)
+
+    send_stun._cmcall_guarded = True
+    StunProtocol.send_stun = send_stun
+
+
+_guard_aioice_send_stun()
+
+
 class CallError(Exception):
     """A call test failed; ``stage`` tells where (setup/signaling/ice/media)."""
 

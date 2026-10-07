@@ -1,5 +1,16 @@
 # cmcall changelog
 
+## 0.1.4
+
+### Fixed
+
+- No more `Exception in callback Transaction.__retry()` / `AttributeError:
+  'NoneType' object has no attribute 'sendto'` tracebacks ~30 s after a call
+  ended: aioice kept retransmitting an unanswered STUN request (e.g. the
+  server-reflexive query to a STUN/TURN server that does not reply) through
+  the already closed socket. Such retransmissions are now skipped and the
+  request times out quietly.
+
 ## 0.1.3
 
 ### Added
