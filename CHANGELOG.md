@@ -1,5 +1,16 @@
 # cmcall changelog
 
+## 0.1.5
+
+### Fixed
+
+- Calls through TURN failed at ICE with 0.1.4: the closed-socket guard around
+  aioice's `send_stun` called `transport.is_closing()`, which aioice's
+  `TurnTransport` (the transport of relay candidates) does not have, so every
+  STUN send via the relay raised `AttributeError` and no connectivity check
+  was ever sent. The guard now only skips sends when the transport is gone or
+  reports itself closing.
+
 ## 0.1.4
 
 ### Fixed

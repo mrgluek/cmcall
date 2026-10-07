@@ -98,7 +98,11 @@ def _guard_aioice_send_stun() -> None:
 
     def send_stun(self, message, addr):
         transport = getattr(self, "transport", None)
-        if transport is None or transport.is_closing():
+        # A relay candidate's transport is aioice's TurnTransport, which has
+        # no is_closing(); calling it unconditionally raised AttributeError on
+        # every send through TURN and no ICE check ever left (0.1.4 bug).
+        is_closing = getattr(transport, "is_closing", None)
+        if transport is None or (is_closing is not None and is_closing()):
             return
         original(self, message, addr)
 

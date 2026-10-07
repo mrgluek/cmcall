@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cmcall"
-version = "0.1.4"
+version = "0.1.5"
 readme = "README.md"
 description = "test Delta Chat calls (signaling + WebRTC media) between chatmail relays"
 license = { text = "MPL-2.0" }
