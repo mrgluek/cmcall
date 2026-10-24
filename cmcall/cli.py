@@ -168,6 +168,23 @@ class Relay:
         out(f"# using accounts_dir for {relay} at: {self.dir}", 1)
         self.rpc = stack.enter_context(Rpc(accounts_dir=self.dir))
         self.dc = DeltaChat(self.rpc)
+        self._drop_unconfigured()
+
+    def _drop_unconfigured(self) -> None:
+        """Remove profiles left half-created by a run that was killed during setup.
+
+        `_create` removes a profile whose setup fails, but not when the process
+        is killed first (e.g. by a caller's subprocess timeout while a dead
+        relay's DNS keeps timing out). Such leftovers pile up, and every one
+        keeps its database open, until deltachat-rpc-server runs out of file
+        descriptors and each DNS lookup fails with EMFILE. The rpc-server holds
+        the accounts dir lock, so no other run can be setting one up right now.
+        """
+        for ac in self.dc.get_all_accounts():
+            if not ac.get_config("configured_addr"):
+                self.out(f"# removing unconfigured profile {ac.id} for {self.relay}", 1)
+                with contextlib.suppress(Exception):
+                    ac.remove()
 
     def account(self, role: str):
         domain = relay_host(self.relay)

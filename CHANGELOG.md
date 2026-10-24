@@ -1,5 +1,17 @@
 # cmcall changelog
 
+## 0.1.6
+
+### Fixed
+
+- A relay could keep failing at `setup` with "Could not find DNS resolutions"
+  although it resolved fine: every run that was killed while setting up a
+  profile (e.g. by a caller's subprocess timeout while the relay's DNS was
+  broken) left a half-created profile behind. They piled up in
+  `~/.cache/cmcall/<relay>/` until deltachat-rpc-server ran out of file
+  descriptors and every DNS lookup failed with EMFILE. Unconfigured profiles
+  are now removed when the relay's accounts dir is opened.
+
 ## 0.1.5
 
 ### Fixed

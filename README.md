@@ -118,6 +118,9 @@ per relay in `~/.cache/cmcall/<relay>/`, and per relay one profile per role
   accounts after a period of inactivity), cmcall drops it and creates a new
   one automatically; the JSON result lists the dropped addresses under
   `recreated`. A brand-new profile that is refused fails the run at `setup`.
+- Half-created profiles (a run killed during setup, e.g. by a caller's
+  timeout) are removed when the relay's directory is opened next time, so
+  they can't pile up until deltachat-rpc-server runs out of file descriptors.
 - Profiles delete their messages after an hour (`delete_device_after`), so
   their databases don't grow with every run.
 - Stray calls from earlier runs are ignored: the callee only answers the
