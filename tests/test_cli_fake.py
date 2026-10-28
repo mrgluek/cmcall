@@ -19,6 +19,7 @@ import queue
 import socket
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -79,7 +80,8 @@ class FakeContact:
 class FakeAccount:
     def __init__(self, rpc, addr, ice, behaviour="answer", reject_login=False):
         self._rpc, self.id = rpc, next(_ids)
-        self.config = {"configured_addr": addr}
+        self.addr = addr
+        self.config = {}
         self.ice, self.msgs, self.behaviour = ice, {}, behaviour
         self.reject_login = reject_login
         self.removed = False
@@ -89,6 +91,14 @@ class FakeAccount:
 
     def get_config(self, key):
         return self.config.get(key)
+
+    def is_configured(self):
+        return bool(self.addr)
+
+    @property
+    def self_contact(self):
+        # Like deltachat_rpc_client: Account.self_contact.get_snapshot().address
+        return SimpleNamespace(get_snapshot=lambda: SimpleNamespace(address=self.addr))
 
     def set_config(self, key, value):
         self.config[key] = value

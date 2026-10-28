@@ -1,5 +1,14 @@
 # cmcall changelog
 
+## 0.1.7
+
+### Fixed
+
+- Core 2.66 support: the profile's own address now comes from the self contact
+  (`self_addr()`) and "is this profile configured" from `is_configured()`.
+  Core 2.66 removed the `configured_addr` config, so `get_config("configured_addr")`
+  raised "unknown key" when cleaning up and reusing profiles. Works with older cores too.
+
 ## 0.1.6
 
 ### Fixed

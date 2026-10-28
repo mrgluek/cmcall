@@ -64,6 +64,18 @@ class LoginRejected(Exception):
         self.remaining = remaining
 
 
+def self_addr(account) -> str:
+    """The profile's own address, or "" if it is not configured.
+
+    Read from the self contact: core 2.66 removed the configured_addr config
+    (get_config raises "unknown key"), and "addr" has been empty since 2.61."""
+    try:
+        addr = account.self_contact.get_snapshot().address
+    except Exception:
+        return ""
+    return addr if isinstance(addr, str) else ""
+
+
 def _login_rejected(ev) -> bool:
     msg = (ev.get("msg") or "").lower()
     return ev.kind in ("Warning", "Error") and "failed to login" in msg and "authentic" in msg
@@ -181,7 +193,7 @@ class Relay:
         the accounts dir lock, so no other run can be setting one up right now.
         """
         for ac in self.dc.get_all_accounts():
-            if not ac.get_config("configured_addr"):
+            if not ac.is_configured():
                 self.out(f"# removing unconfigured profile {ac.id} for {self.relay}", 1)
                 with contextlib.suppress(Exception):
                     ac.remove()
@@ -189,7 +201,7 @@ class Relay:
     def account(self, role: str):
         domain = relay_host(self.relay)
         for ac in self.dc.get_all_accounts():
-            addr = ac.get_config("configured_addr")
+            addr = self_addr(ac)
             if addr and ac.get_config(ROLE_KEY) == role:
                 if self.relay.startswith("https://") or addr.split("@")[-1] == domain:
                     return ac
@@ -269,7 +281,7 @@ def bring_online(accounts, out: Out, timeout: float) -> None:
         ac.set_config("delete_device_after", DELETE_DEVICE_AFTER)
         ac.start_io()
     for i, ac in enumerate(accounts):
-        addr = ac.get_config("configured_addr")
+        addr = self_addr(ac)
         ev = Events(ac, out, addr).wait(
             lambda e: e.kind == "ImapInboxIdle" or _login_rejected(e),
             timeout,
@@ -293,7 +305,7 @@ def bring_online_or_recreate(profiles: dict, ctx: dict, out: Out, timeout: float
             role, (relay, _old) = next(
                 (r, v) for r, v in profiles.items() if v[1] is e.account
             )
-            addr = e.account.get_config("configured_addr")
+            addr = self_addr(e.account)
             if role in recreated:
                 raise Failure("setup", f"{relay} rejected the login of a brand-new profile {addr}: {e}") from e
             out(f"# {addr} was rejected by {relay} (deleted after inactivity?), creating a new profile")
@@ -388,13 +400,13 @@ def _run(args, out: Out, result: dict, stack, loop: rtc.CallLoop, peers: dict) -
     bring_online_or_recreate(profiles, ctx, out, args.timeout, result)
     caller = profiles[caller_role][1]
     callee = profiles["callee"][1] if "callee" in profiles else None
-    caller_addr = caller.get_config("configured_addr")
+    caller_addr = self_addr(caller)
     result["caller"] = caller_addr
     caller_ev = Events(caller, out, caller_addr)
     callee_ev = None
     if callee is not None:
         callee.set_config("who_can_call_me", "0")  # everybody
-        result["callee"] = callee.get_config("configured_addr")
+        result["callee"] = self_addr(callee)
         callee_ev = Events(callee, out, result["callee"])
 
     # turn_as_stun: like Delta Chat apps (libwebrtc) - matters only for --ice all,

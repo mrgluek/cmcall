@@ -9,6 +9,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,12 +20,21 @@ from cmcall import cli  # noqa: E402
 class FakeAccount:
     def __init__(self, accid, addr=None, fail_remove=False):
         self.id = accid
-        self.config = {"configured_addr": addr}
+        self.addr = addr
+        self.config = {}
         self.fail_remove = fail_remove
         self.removed = False
 
     def get_config(self, key):
         return self.config.get(key)
+
+    def is_configured(self):
+        return bool(self.addr)
+
+    @property
+    def self_contact(self):
+        # Like deltachat_rpc_client: Account.self_contact.get_snapshot().address
+        return SimpleNamespace(get_snapshot=lambda: SimpleNamespace(address=self.addr))
 
     def remove(self):
         if self.fail_remove:
